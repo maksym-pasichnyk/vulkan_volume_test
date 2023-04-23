@@ -24,9 +24,80 @@ struct lazy : Fn {
 template<typename Fn>
 lazy(Fn&&) -> lazy<Fn>;
 
+enum class StorageMode {
+    ePrivate,
+    eShared,
+    eManaged,
+    eLazy,
+};
+
 struct ShaderUniforms {
     alignas(16) glm::mat4x4 world_to_clip;
     alignas(16) glm::vec3   camera_position;
+};
+
+struct Vertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 texcoord;
+};
+
+Vertex triangle_vertices[] = {
+    // left face (white)
+    {{0.0F, 0.0F, 1.0F}, {.9f, .9f, .9f}, {0.0F, 0.0F}},
+    {{0.0F, 1.0F, 1.0F}, {.9f, .9f, .9f}, {0.0F, 1.0F}},
+    {{0.0F, 1.0F, 0.0F}, {.9f, .9f, .9f}, {1.0F, 1.0F}},
+    {{0.0F, 0.0F, 0.0F}, {.9f, .9f, .9f}, {1.0F, 0.0F}},
+
+    // right face (yellow)
+    {{1.0F, 0.0F, 0.0F}, {.8f, .8f, .1f}, {0.0F, 0.0F}},
+    {{1.0F, 1.0F, 0.0F}, {.8f, .8f, .1f}, {0.0F, 1.0F}},
+    {{1.0F, 1.0F, 1.0F}, {.8f, .8f, .1f}, {1.0F, 1.0F}},
+    {{1.0F, 0.0F, 1.0F}, {.8f, .8f, .1f}, {1.0F, 0.0F}},
+
+    // bottom face (orange)
+    {{0.0F, 0.0F, 1.0F}, {.9f, .6f, .1f}, {0.0F, 0.0F}},
+    {{0.0F, 0.0F, 0.0F}, {.9f, .6f, .1f}, {0.0F, 1.0F}},
+    {{1.0F, 0.0F, 0.0F}, {.9f, .6f, .1f}, {1.0F, 1.0F}},
+    {{1.0F, 0.0F, 1.0F}, {.9f, .6f, .1f}, {1.0F, 0.0F}},
+
+    // top face (red)
+    {{0.0F, 1.0F, 0.0F}, {.8f, .1f, .1f}, {0.0F, 0.0F}},
+    {{0.0F, 1.0F, 1.0F}, {.8f, .1f, .1f}, {0.0F, 1.0F}},
+    {{1.0F, 1.0F, 1.0F}, {.8f, .1f, .1f}, {1.0F, 1.0F}},
+    {{1.0F, 1.0F, 0.0F}, {.8f, .1f, .1f}, {1.0F, 0.0F}},
+
+    // nose face (blue)
+    {{1.0F, 0.0F, 1.0F}, {.1f, .1f, .8f}, {0.0F, 0.0F}},
+    {{1.0F, 1.0F, 1.0F}, {.1f, .1f, .8f}, {0.0F, 1.0F}},
+    {{0.0F, 1.0F, 1.0F}, {.1f, .1f, .8f}, {1.0F, 1.0F}},
+    {{0.0F, 0.0F, 1.0F}, {.1f, .1f, .8f}, {1.0F, 0.0F}},
+
+    // tail face (green)
+    {{0.0F, 0.0F, 0.0F}, {.1f, .8f, .1f}, {0.0F, 0.0F}},
+    {{0.0F, 1.0F, 0.0F}, {.1f, .8f, .1f}, {0.0F, 1.0F}},
+    {{1.0F, 1.0F, 0.0F}, {.1f, .8f, .1f}, {1.0F, 1.0F}},
+    {{1.0F, 0.0F, 0.0F}, {.1f, .8f, .1f}, {1.0F, 0.0F}},
+};
+
+uint triangle_indices[] = {
+    0, 1, 2,
+    0, 2, 3,
+
+    4, 5, 6,
+    4, 6, 7,
+
+    8, 9, 10,
+    8, 10, 11,
+
+    12, 13, 14,
+    12, 14, 15,
+
+    16, 17, 18,
+    16, 18, 19,
+
+    20, 21, 22,
+    20, 22, 23
 };
 
 struct VulkanApplication {
@@ -76,7 +147,7 @@ struct VulkanApplication {
 
         vk::Buffer          index_buffer;
         vk::DeviceMemory    index_buffer_memory;
-    } geometry;
+    } volume_geometry;
 
     struct {
         vk::Image image;
@@ -84,6 +155,13 @@ struct VulkanApplication {
         vk::Sampler sampler;
         vk::DeviceMemory memory;
     } car_volume_texture;
+
+    struct {
+        vk::Image image;
+        vk::ImageView view;
+        vk::Sampler sampler;
+        vk::DeviceMemory memory;
+    } palette_texture;
 
     struct {
         vk::Pipeline graphics_pipeline;
@@ -107,6 +185,7 @@ struct VulkanApplication {
         initDescriptorPool();
         initGraphicsPipelines();
         initCarVolumeTexture();
+        initGeometryBuffers();
     }
 
     ~VulkanApplication() {
@@ -481,19 +560,20 @@ struct VulkanApplication {
         shader_stages[1].pName = "main";
 
         vk::VertexInputAttributeDescription attributes[] = {
-            {0, 0, vk::Format::eR32G32B32Sfloat, 0},
-            {1, 0, vk::Format::eR32G32B32Sfloat, 12}
+            {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position)},
+            {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
+            {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texcoord)},
         };
 
         vk::VertexInputBindingDescription bindings[] = {
-            {0, sizeof(f32) * 6, vk::VertexInputRate::eVertex}
+            {0, sizeof(Vertex), vk::VertexInputRate::eVertex}
         };
 
         vk::PipelineVertexInputStateCreateInfo vertex_input_info = {};
-//        vertex_input_info.vertexBindingDescriptionCount = 1;
-//        vertex_input_info.pVertexBindingDescriptions = bindings;
-//        vertex_input_info.vertexAttributeDescriptionCount = 2;
-//        vertex_input_info.pVertexAttributeDescriptions = attributes;
+        vertex_input_info.vertexBindingDescriptionCount = 1;
+        vertex_input_info.pVertexBindingDescriptions = bindings;
+        vertex_input_info.vertexAttributeDescriptionCount = 3;
+        vertex_input_info.pVertexAttributeDescriptions = attributes;
 
         vk::PipelineInputAssemblyStateCreateInfo input_assembly_info = {};
         input_assembly_info.topology = vk::PrimitiveTopology::eTriangleList;
@@ -504,8 +584,8 @@ struct VulkanApplication {
         viewport_state.scissorCount = 1;
 
         vk::PipelineRasterizationStateCreateInfo rasterizer_info = {};
-//        rasterizer_info.cullMode = vk::CullModeFlagBits::eBack;
-//        rasterizer_info.frontFace = vk::FrontFace::eClockwise;
+        rasterizer_info.cullMode = vk::CullModeFlagBits::eFront;
+        rasterizer_info.frontFace = vk::FrontFace::eClockwise;
         rasterizer_info.lineWidth = 1.0f;
         rasterizer_info.polygonMode = vk::PolygonMode::eFill;
 
@@ -568,16 +648,12 @@ struct VulkanApplication {
         descriptor_set_allocate_info.pSetLayouts = &unlit_normal_material.descriptor_set_layout;
 
         vk::resultCheck(logical_device.allocateDescriptorSets(&descriptor_set_allocate_info, &unlit_normal_material.descriptor_set), "Failed to allocate descriptor set");
-
     }
 
     void destroyGraphicsPipelines() {
         logical_device.destroyPipeline(unlit_normal_material.graphics_pipeline);
         logical_device.destroyPipelineLayout(unlit_normal_material.pipeline_layout);
     }
-
-    int bufferRowLength = 48;
-    int bufferImageHeight = 112;
 
     void initCarVolumeTexture() {
         FILE* file = fopen("car-volume.png", "rb");
@@ -671,7 +747,7 @@ struct VulkanApplication {
 
         void* data;
         vk::resultCheck(logical_device.mapMemory(staging_buffer_memory, 0, staging_buffer_memory_requirements.size, vk::MemoryMapFlags(), &data), "Failed to map memory");
-        std::memcpy(data, raw, width * height);
+        std::memcpy(data, raw, total_width * total_height);
         logical_device.unmapMemory(staging_buffer_memory);
 
         vk::CommandBuffer command_buffer = createCommandBuffer(command_pool, vk::CommandBufferLevel::ePrimary);
@@ -705,9 +781,9 @@ struct VulkanApplication {
         vk::BufferImageCopy buffer_image_copies[12] = {};
         for (u32 i = 0; i < 12; ++i) {
             // Copy only the first layer of the image
-            buffer_image_copies[i].bufferOffset = 0;
-            buffer_image_copies[i].bufferRowLength = bufferRowLength;
-            buffer_image_copies[i].bufferImageHeight = bufferImageHeight;
+            buffer_image_copies[i].bufferOffset = width * i;
+            buffer_image_copies[i].bufferRowLength = total_width;
+            buffer_image_copies[i].bufferImageHeight = total_height;
             buffer_image_copies[i].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
             buffer_image_copies[i].imageSubresource.mipLevel = 0;
             buffer_image_copies[i].imageSubresource.baseArrayLayer = i;
@@ -763,6 +839,81 @@ struct VulkanApplication {
 
     void destroyCarVolumeTexture() {
 
+    }
+
+    void initGeometryBuffers() {
+        vk::BufferCreateInfo vertex_buffer_info = {};
+        vertex_buffer_info.size = sizeof(triangle_vertices);
+        vertex_buffer_info.usage = vk::BufferUsageFlagBits::eVertexBuffer;
+        vertex_buffer_info.sharingMode = vk::SharingMode::eExclusive;
+
+        createBuffer(
+            vertex_buffer_info,
+            StorageMode::eShared,
+            &volume_geometry.vertex_buffer,
+            &volume_geometry.vertex_buffer_memory
+        );
+
+        void* vptr;
+        vk::resultCheck(logical_device.mapMemory(volume_geometry.vertex_buffer_memory, 0, VK_WHOLE_SIZE, vk::MemoryMapFlags(), &vptr), "Failed to map memory");
+        std::memcpy(vptr, triangle_vertices, sizeof(triangle_vertices));
+        logical_device.unmapMemory(volume_geometry.vertex_buffer_memory);
+
+        vk::BufferCreateInfo index_buffer_info = {};
+        index_buffer_info.size = sizeof(triangle_indices);
+        index_buffer_info.usage = vk::BufferUsageFlagBits::eIndexBuffer;
+        index_buffer_info.sharingMode = vk::SharingMode::eExclusive;
+        createBuffer(
+            index_buffer_info,
+            StorageMode::eShared,
+            &volume_geometry.index_buffer,
+            &volume_geometry.index_buffer_memory
+        );
+
+        void* iptr;
+        vk::resultCheck(logical_device.mapMemory(volume_geometry.index_buffer_memory, 0, VK_WHOLE_SIZE, vk::MemoryMapFlags(), &iptr), "Failed to map memory");
+        std::memcpy(iptr, triangle_indices, sizeof(triangle_indices));
+        logical_device.unmapMemory(volume_geometry.index_buffer_memory);
+    }
+
+    void createBuffer(const vk::BufferCreateInfo& buffer_create_info, StorageMode storage_mode, vk::Buffer* out_buffer, vk::DeviceMemory* out_memory) {
+        vk::MemoryPropertyFlags required_flags = {};
+        switch (storage_mode) {
+            case StorageMode::ePrivate:
+                required_flags |= vk::MemoryPropertyFlagBits::eDeviceLocal;
+                break;
+            case StorageMode::eShared:
+                required_flags |= vk::MemoryPropertyFlagBits::eHostVisible;
+                required_flags |= vk::MemoryPropertyFlagBits::eHostCoherent;
+                break;
+            case StorageMode::eManaged:
+                required_flags |= vk::MemoryPropertyFlagBits::eHostVisible;
+                required_flags |= vk::MemoryPropertyFlagBits::eHostCached;
+                break;
+            case StorageMode::eLazy:
+                required_flags |= vk::MemoryPropertyFlagBits::eDeviceLocal;
+                required_flags |= vk::MemoryPropertyFlagBits::eLazilyAllocated;
+                break;
+        }
+
+        auto preferred_flags = required_flags | vk::MemoryPropertyFlagBits::eDeviceLocal;
+
+        vk::resultCheck(logical_device.createBuffer(&buffer_create_info, nullptr, out_buffer), "Failed to create buffer");
+
+        vk::MemoryRequirements buffer_memory_requirements;
+        logical_device.getBufferMemoryRequirements(*out_buffer, &buffer_memory_requirements);
+
+        u32 memory_type_index = findMemoryType(buffer_memory_requirements.memoryTypeBits, preferred_flags);
+        if (memory_type_index == std::numeric_limits<u32>::max()) {
+            memory_type_index = findMemoryType(buffer_memory_requirements.memoryTypeBits, required_flags);
+        }
+
+        vk::MemoryAllocateInfo memory_allocate_info = {};
+        memory_allocate_info.allocationSize = buffer_memory_requirements.size;
+        memory_allocate_info.memoryTypeIndex = memory_type_index;
+
+        vk::resultCheck(logical_device.allocateMemory(&memory_allocate_info, nullptr, out_memory), "Failed to allocate memory");
+        logical_device.bindBufferMemory(*out_buffer, *out_memory, 0);
     }
 
     auto createCommandBuffer(vk::CommandPool pool, vk::CommandBufferLevel level) -> vk::CommandBuffer {
@@ -833,33 +984,6 @@ struct VulkanApplication {
                 switch (event.type) {
                     case SDL_QUIT: {
                         quit = true;
-                        break;
-                    }
-                    case SDL_KEYDOWN: {
-                        if (event.key.keysym.sym == SDLK_q) {
-                            logical_device.waitIdle();
-                            bufferRowLength += 1;
-                            fprintf(stdout, "BufferRowLength: %d\n", bufferRowLength);
-                            initCarVolumeTexture();
-                        }
-                        if (event.key.keysym.sym == SDLK_e) {
-                            logical_device.waitIdle();
-                            bufferRowLength -= 1;
-                            fprintf(stdout, "BufferRowLength: %d\n", bufferRowLength);
-                            initCarVolumeTexture();
-                        }
-                        if (event.key.keysym.sym == SDLK_r) {
-                            logical_device.waitIdle();
-                            bufferImageHeight += 1;
-                            fprintf(stdout, "BufferImageHeight: %d\n", bufferImageHeight);
-                            initCarVolumeTexture();
-                        }
-                        if (event.key.keysym.sym == SDLK_t) {
-                            logical_device.waitIdle();
-                            bufferImageHeight -= 1;
-                            fprintf(stdout, "BufferImageHeight: %d\n", bufferImageHeight);
-                            initCarVolumeTexture();
-                        }
                         break;
                     }
                     default: {
@@ -1013,7 +1137,7 @@ struct VulkanApplication {
             -glm::radians(45.0f),
             -static_cast<f32>(swapchain_extent.width) / static_cast<f32>(swapchain_extent.height),
             0.1f,
-            100.0f
+            1000.0f
         );
 
         ShaderUniforms shader_uniforms = {};
@@ -1027,7 +1151,9 @@ struct VulkanApplication {
         command_buffers[frame_index].pushConstants(unlit_normal_material.pipeline_layout, vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(ShaderUniforms), &shader_uniforms);
         command_buffers[frame_index].setViewport(0, 1, &viewport);
         command_buffers[frame_index].setScissor(0, 1, &render_area);
-        command_buffers[frame_index].draw(36, 1, 0, 0);
+        command_buffers[frame_index].bindVertexBuffers(0, volume_geometry.vertex_buffer, 0ull);
+        command_buffers[frame_index].bindIndexBuffer(volume_geometry.index_buffer, 0ull, vk::IndexType::eUint32);
+        command_buffers[frame_index].drawIndexed(std::size(triangle_indices), 1, 0, 0, 0);
         command_buffers[frame_index].endRendering();
 
         // Change image layout to present
